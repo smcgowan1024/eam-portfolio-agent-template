@@ -1,30 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import re
 import shutil
 import sys
 from pathlib import Path
 
 import yaml
-
-
-# ----------------------------------------------------------------------
-# Shared Portfolio Analyst instructions
-# ----------------------------------------------------------------------
-
-INSTRUCTIONS = [
-    "Assist portfolio companies in focusing on key items required for a successful exit.",
-    "Provide guidance based on uploaded recommendations and company materials.",
-    "Ensure companies prioritize critical aspects such as financial readiness, operational efficiency, market positioning, and legal compliance.",
-    "Offer strategic insights, practical action steps, and tailored advice.",
-    "Reference available company documents to provide consistent and relevant recommendations.",
-    "Allow for further clarification and discussion as needed.",
-    "Support interactive analysis of documents provided by the user.",
-    "Utilize historic monthly and quarterly operational reports to build context for the pace of performance.",
-    "Gauge whether the pace of performance is improving based on available historical materials.",
-    "Incorporate additional company materials as they become available.",
-]
 
 
 # ----------------------------------------------------------------------
@@ -71,7 +52,7 @@ def write_text(path: Path, content: str) -> None:
 
 
 # ----------------------------------------------------------------------
-# Company config
+# Validation
 # ----------------------------------------------------------------------
 
 def validate_company_config(config: dict) -> None:
@@ -89,13 +70,28 @@ def validate_company_config(config: dict) -> None:
 
     if missing:
         raise ValueError(
-            "Missing required company config fields: "
+            "Missing company configuration fields: "
             + ", ".join(missing)
         )
 
 
+def validate_defaults(defaults: dict) -> None:
+    if not defaults.get("description"):
+        raise ValueError(
+            "shared/agent_defaults.yml is missing 'description'."
+        )
+
+    instructions = defaults.get("instructions")
+
+    if not isinstance(instructions, list) or not instructions:
+        raise ValueError(
+            "shared/agent_defaults.yml must contain "
+            "a non-empty 'instructions' list."
+        )
+
+
 # ----------------------------------------------------------------------
-# Shared prompts
+# Shared suggested prompts
 # ----------------------------------------------------------------------
 
 def load_sample_prompts(prompt_config: dict) -> list[dict]:
@@ -104,7 +100,7 @@ def load_sample_prompts(prompt_config: dict) -> list[dict]:
     if not isinstance(prompts, list) or not prompts:
         raise ValueError(
             "shared/sample_prompts.yml must contain "
-            "a non-empty samplePrompts list."
+            "a non-empty 'samplePrompts' list."
         )
 
     result = []
@@ -151,6 +147,9 @@ def load_sample_prompts(prompt_config: dict) -> list[dict]:
                 f"Invalid sample prompt #{index}: {prompt}"
             )
 
+    if not result:
+        raise ValueError("No valid suggested prompts found.")
+
     return result
 
 
@@ -158,239 +157,250 @@ def load_sample_prompts(prompt_config: dict) -> list[dict]:
 # Standard agent.mcs.yml
 # ----------------------------------------------------------------------
 
-def update_standard_agent(
+def update_agent(
     agent_path: Path,
     company_config: dict,
+    defaults: dict,
     sample_prompts: list[dict],
 ) -> None:
 
     agent = load_yaml(agent_path)
 
-    # Preserve Microsoft-generated schemaName and identity.
-    # Only change the fields we own.
+    # Preserve all Microsoft-generated identity and model information.
+    # Only update the common fields owned by our Portfolio Analyst template.
 
-    if "displayName" in agent:
-        agent["displayName"] = company_config["agentDisplayName"]
+    metadata = agent.setdefault("mcs.metadata", {})
 
-    if "description" in agent:
-        agent["description"] = (
-            f"Portfolio analyst for {company_config['companyName']}."
-        )
-
-    # Standard agents store authored instructions here.
-    agent["instructions"] = "\n".join(
-        f"- {instruction}"
-        for instruction in INSTRUCTIONS
+    metadata["componentName"] = (
+        company_config["agentComponentName"]
     )
 
-    # Standard conversation starters.
-    starters = []
+    agent["description"] = str(
+        defaults["description"]
+    ).strip()
 
-    for prompt in sample_prompts:
-        starters.append(
-            {
-                "title": prompt["title"],
-                "text": prompt["text"],
-            }
-        )
+    agent["instructions"] = "\n".join(
+        f"- {instruction}"
+        for instruction in defaults["instructions"]
+    )
 
-    agent["conversationStarters"] = starters
+    agent["conversationStarters"] = [
+        {
+            "title": prompt["title"],
+            "text": prompt["text"],
+        }
+        for prompt in sample_prompts
+    ]
 
     write_yaml(agent_path, agent)
 
-    print(f"Updated Standard agent:")
+    print("Updated Standard agent:")
     print(f"  {agent_path}")
-    print(f"  Prompts: {len(starters)}")
+    print(f"  Description: yes")
+    print(
+        f"  Instructions: "
+        f"{len(defaults['instructions'])}"
+    )
+    print(
+        f"  Suggested prompts: "
+        f"{len(sample_prompts)}"
+    )
 
 
 # ----------------------------------------------------------------------
-# Token substitution for proven Evention components
+# Knowledge sources
 # ----------------------------------------------------------------------
 
-def substitute_evention_values(
-    content: str,
+def find_template_knowledge_file(
+    template_dir: Path,
+    source_kind: str,
+) -> Path:
+
+    knowledge_dir = template_dir / "knowledge"
+
+    if not knowledge_dir.exists():
+        raise FileNotFoundError(
+            f"Template knowledge folder not found: "
+            f"{knowledge_dir}"
+        )
+
+    for path in knowledge_dir.glob("*.mcs.yml"):
+
+        data = load_yaml(path)
+
+        source = data.get("source", {})
+
+        if source.get("kind") == source_kind:
+            return path
+
+    raise FileNotFoundError(
+        f"Could not find Evention knowledge template "
+        f"with source kind {source_kind}"
+    )
+
+
+def build_sharepoint_knowledge(
+    template_dir: Path,
+    target_dir: Path,
     company_config: dict,
-) -> str:
+) -> None:
 
-    company = company_config["companyName"]
-    display_name = company_config["agentDisplayName"]
-    component_name = company_config["agentComponentName"]
-    sharepoint_name = company_config["companySharePointName"]
-    company_url = company_config["companyUrl"]
-    sharepoint_url = company_config["sharePointUrl"]
-    dynamics_description = company_config["dynamicsAgentDescription"]
+    template_path = find_template_knowledge_file(
+        template_dir,
+        "SharePointSearchSource",
+    )
+
+    knowledge = load_yaml(template_path)
+
+    metadata = knowledge.setdefault(
+        "mcs.metadata",
+        {}
+    )
+
+    metadata["componentName"] = (
+        company_config["companySharePointName"]
+    )
+
+    metadata["description"] = (
+        f"This knowledge source provides information "
+        f"found in {company_config['companyName']} SharePoint."
+    )
+
+    source = knowledge.setdefault("source", {})
+
+    source["kind"] = "SharePointSearchSource"
+    source["site"] = company_config["sharePointUrl"]
+
+    destination = (
+        target_dir
+        / "knowledge"
+        / "company-sharepoint.mcs.yml"
+    )
+
+    write_yaml(destination, knowledge)
+
+    print("Updated SharePoint knowledge:")
+    print(f"  {destination}")
+    print(f"  {company_config['sharePointUrl']}")
+
+
+def build_website_knowledge(
+    template_dir: Path,
+    target_dir: Path,
+    company_config: dict,
+) -> None:
+
+    template_path = find_template_knowledge_file(
+        template_dir,
+        "PublicSiteSearchSource",
+    )
+
+    knowledge = load_yaml(template_path)
+
+    metadata = knowledge.get("mcs.metadata")
+
+    if isinstance(metadata, dict):
+        metadata["componentName"] = (
+            f"{company_config['companyName']} Website"
+        )
+
+        metadata["description"] = (
+            f"Public website knowledge source for "
+            f"{company_config['companyName']}."
+        )
+
+    source = knowledge.setdefault("source", {})
+
+    source["kind"] = "PublicSiteSearchSource"
+    source["site"] = company_config["companyUrl"]
+
+    destination = (
+        target_dir
+        / "knowledge"
+        / "company-website.mcs.yml"
+    )
+
+    write_yaml(destination, knowledge)
+
+    print("Updated website knowledge:")
+    print(f"  {destination}")
+    print(f"  {company_config['companyUrl']}")
+
+
+# ----------------------------------------------------------------------
+# Dynamics connected agent
+# ----------------------------------------------------------------------
+
+def build_dynamics_agent(
+    template_dir: Path,
+    target_dir: Path,
+    company_config: dict,
+) -> None:
+
+    source_path = (
+        template_dir
+        / "agents"
+        / "CopilotinDynamics365Sales.mcs.yml"
+    )
+
+    destination = (
+        target_dir
+        / "agents"
+        / "CopilotinDynamics365Sales.mcs.yml"
+    )
+
+    content = read_text(source_path)
 
     replacements = {
-        "Portfolio Analyst Evention": display_name,
-        "PortfolioAnalystEvention": component_name.replace(" ", ""),
-        "portfolioAnalystEvention": component_name.replace(" ", ""),
-        "portfolioanalystevention": component_name.replace(" ", "").lower(),
-        "Evention NEW": sharepoint_name,
-        "Evention": company,
-        "https://www.eventionllc.com/": company_url,
-        "https://www.eventionllc.com": company_url.rstrip("/"),
-        "Dynamics Agent for Evention": dynamics_description,
+        "Dynamics Agent for Evention":
+            company_config["dynamicsAgentDescription"],
+
+        "Portfolio Analyst Evention":
+            company_config["agentDisplayName"],
+
+        "Evention":
+            company_config["companyName"],
     }
 
     for old, new in replacements.items():
         content = content.replace(old, new)
 
-    # Replace any Evention SharePoint URL with the company SharePoint URL.
-    content = re.sub(
-        r"https://equalityam\.sharepoint\.com/[^\s'\"<>]+Evention[^\s'\"<>]*",
-        sharepoint_url,
-        content,
-        flags=re.IGNORECASE,
-    )
+    write_text(destination, content)
 
-    return content
-
-
-# ----------------------------------------------------------------------
-# Copy proven Evention Standard components
-# ----------------------------------------------------------------------
-
-def copy_evention_component(
-    source: Path,
-    destination: Path,
-    company_config: dict,
-) -> None:
-
-    content = read_text(source)
-
-    updated = substitute_evention_values(
-        content,
-        company_config,
-    )
-
-    write_text(
-        destination,
-        updated,
-    )
-
-    print(f"Created:")
+    print("Updated Dynamics connected agent:")
     print(f"  {destination}")
 
 
-def build_standard_components(
-    evention_dir: Path,
+# ----------------------------------------------------------------------
+# Connection references
+# ----------------------------------------------------------------------
+
+def copy_connection_references(
+    template_dir: Path,
     target_dir: Path,
-    company_config: dict,
 ) -> None:
 
-    # ------------------------------------------------------------------
-    # Dynamics connected agent
-    # ------------------------------------------------------------------
-
-    source_dynamics = (
-        evention_dir
-        / "agents"
-        / "CopilotinDynamics365Sales.mcs.yml"
-    )
-
-    target_dynamics = (
-        target_dir
-        / "agents"
-        / "CopilotinDynamics365Sales.mcs.yml"
-    )
-
-    copy_evention_component(
-        source_dynamics,
-        target_dynamics,
-        company_config,
-    )
-
-    # ------------------------------------------------------------------
-    # Connection references
-    # ------------------------------------------------------------------
-
-    source_connections = (
-        evention_dir
+    source = (
+        template_dir
         / "connectionreferences.mcs.yml"
     )
 
-    target_connections = (
+    destination = (
         target_dir
         / "connectionreferences.mcs.yml"
     )
 
-    copy_evention_component(
-        source_connections,
-        target_connections,
-        company_config,
-    )
-
-    # ------------------------------------------------------------------
-    # Knowledge
-    #
-    # Use the known-good Evention knowledge files as templates.
-    # ------------------------------------------------------------------
-
-    source_knowledge_dir = (
-        evention_dir
-        / "knowledge"
-    )
-
-    target_knowledge_dir = (
-        target_dir
-        / "knowledge"
-    )
-
-    target_knowledge_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    knowledge_files = sorted(
-        source_knowledge_dir.glob("*.mcs.yml")
-    )
-
-    if not knowledge_files:
-        raise FileNotFoundError(
-            f"No Evention knowledge files found under "
-            f"{source_knowledge_dir}"
+    if not source.exists():
+        print(
+            "No Evention connectionreferences.mcs.yml found; "
+            "skipping."
         )
+        return
 
-    for index, source_file in enumerate(
-        knowledge_files,
-        start=1,
-    ):
+    shutil.copyfile(source, destination)
 
-        content = read_text(source_file)
-
-        updated = substitute_evention_values(
-            content,
-            company_config,
-        )
-
-        # Keep generated component identifiers out of the filename.
-        # Use predictable company-neutral local filenames.
-        lower = updated.lower()
-
-        if "sharepointsearchsource" in lower:
-            filename = "company-sharepoint.mcs.yml"
-
-        elif (
-            "publicsitesearchsource" in lower
-            or company_config["companyUrl"].lower() in lower
-        ):
-            filename = "company-website.mcs.yml"
-
-        else:
-            filename = f"knowledge-{index}.mcs.yml"
-
-        destination = (
-            target_knowledge_dir
-            / filename
-        )
-
-        write_text(
-            destination,
-            updated,
-        )
-
-        print(f"Created:")
-        print(f"  {destination}")
+    print("Copied connection references:")
+    print(f"  {destination}")
 
 
 # ----------------------------------------------------------------------
@@ -401,22 +411,21 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Build a Standard Copilot Studio Portfolio Analyst "
-            "using the working Evention Standard agent as the template."
+            "Build an EAM Portfolio Analyst using "
+            "the Standard Copilot Studio harness."
         )
     )
 
     parser.add_argument(
         "company",
-        help="Company config name, for example: miva",
+        help="Company configuration name, e.g. miva",
     )
 
     parser.add_argument(
         "--agent-dir",
         required=True,
         help=(
-            "Fresh Standard target agent directory, "
-            'for example "Portfolio Analyst Miva"'
+            "Existing Standard Copilot Studio agent directory."
         ),
     )
 
@@ -424,7 +433,7 @@ def main() -> None:
         "--template-dir",
         default="Portfolio Analyst Evention",
         help=(
-            "Working Standard template agent directory. "
+            "Working Standard template agent. "
             'Default: "Portfolio Analyst Evention"'
         ),
     )
@@ -439,6 +448,12 @@ def main() -> None:
         / f"{args.company}.yml"
     )
 
+    defaults_file = (
+        repo_root
+        / "shared"
+        / "agent_defaults.yml"
+    )
+
     prompts_file = (
         repo_root
         / "shared"
@@ -450,13 +465,13 @@ def main() -> None:
         / args.agent_dir
     ).resolve()
 
-    evention_dir = (
+    template_dir = (
         repo_root
         / args.template_dir
     ).resolve()
 
     # ------------------------------------------------------------------
-    # Validate
+    # Validate folders
     # ------------------------------------------------------------------
 
     if not target_dir.exists():
@@ -464,56 +479,82 @@ def main() -> None:
             f"Target agent directory not found: {target_dir}"
         )
 
-    if not evention_dir.exists():
+    if not template_dir.exists():
         raise FileNotFoundError(
-            f"Evention template directory not found: {evention_dir}"
+            f"Template agent directory not found: {template_dir}"
         )
+
+    agent_path = (
+        target_dir
+        / "agent.mcs.yml"
+    )
+
+    if not agent_path.exists():
+        raise FileNotFoundError(
+            "This does not appear to be a Standard agent. "
+            f"agent.mcs.yml was not found under {target_dir}"
+        )
+
+    # ------------------------------------------------------------------
+    # Load configuration
+    # ------------------------------------------------------------------
 
     company_config = load_yaml(
         company_file
     )
 
-    validate_company_config(
-        company_config
+    defaults = load_yaml(
+        defaults_file
     )
 
     prompt_config = load_yaml(
         prompts_file
     )
 
+    validate_company_config(
+        company_config
+    )
+
+    validate_defaults(
+        defaults
+    )
+
     sample_prompts = load_sample_prompts(
         prompt_config
     )
 
-    target_agent_file = (
-        target_dir
-        / "agent.mcs.yml"
-    )
-
-    if not target_agent_file.exists():
-        raise FileNotFoundError(
-            f"Fresh Standard agent.mcs.yml not found: "
-            f"{target_agent_file}"
-        )
-
     # ------------------------------------------------------------------
-    # Update the fresh Standard shell
+    # Build
     # ------------------------------------------------------------------
 
-    update_standard_agent(
-        target_agent_file,
+    update_agent(
+        agent_path,
         company_config,
+        defaults,
         sample_prompts,
     )
 
-    # ------------------------------------------------------------------
-    # Copy only proven Evention Standard components
-    # ------------------------------------------------------------------
-
-    build_standard_components(
-        evention_dir,
+    build_sharepoint_knowledge(
+        template_dir,
         target_dir,
         company_config,
+    )
+
+    build_website_knowledge(
+        template_dir,
+        target_dir,
+        company_config,
+    )
+
+    build_dynamics_agent(
+        template_dir,
+        target_dir,
+        company_config,
+    )
+
+    copy_connection_references(
+        template_dir,
+        target_dir,
     )
 
     # ------------------------------------------------------------------
@@ -521,48 +562,50 @@ def main() -> None:
     # ------------------------------------------------------------------
 
     print()
-    print("=" * 60)
+    print("=" * 64)
     print("STANDARD PORTFOLIO ANALYST BUILD COMPLETE")
-    print("=" * 60)
+    print("=" * 64)
 
     print(
-        f"Company:     "
+        f"Company:          "
         f"{company_config['companyName']}"
     )
 
     print(
-        f"Agent:       "
+        f"Agent:            "
         f"{company_config['agentDisplayName']}"
     )
 
     print(
-        f"Prompts:     "
-        f"{len(sample_prompts)}"
+        f"Instructions:     "
+        f"{len(defaults['instructions'])}"
     )
 
     print(
-        f"SharePoint:  "
+        f"Suggested prompts:"
+        f" {len(sample_prompts)}"
+    )
+
+    print(
+        f"SharePoint:       "
         f"{company_config['sharePointUrl']}"
     )
 
     print(
-        f"Website:     "
+        f"Website:          "
         f"{company_config['companyUrl']}"
     )
 
     print()
-    print("Standard system topics were left untouched.")
-    print("Miva schema/identity in agent.mcs.yml was preserved.")
-    print("Evention Standard components were used as templates.")
+    print("Not modified:")
+    print("  settings.mcs.yml")
+    print("  system topics")
+    print("  Microsoft-generated agent identity")
+    print("  model selection")
     print()
     print("Next:")
     print("  git status")
     print("  git diff")
-    print()
-    print(
-        "Review the generated files before applying "
-        "changes to Copilot Studio."
-    )
 
 
 if __name__ == "__main__":
