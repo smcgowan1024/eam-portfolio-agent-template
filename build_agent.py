@@ -1,15 +1,96 @@
-from pathlib import Path
+from __future__ import annotations
+
 import argparse
-import re
 import sys
+from pathlib import Path
+
 import yaml
 
 
-def load_config(config_file: Path):
-    with config_file.open("r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+# ----------------------------------------------------------------------
+# Shared Portfolio Analyst instructions
+# ----------------------------------------------------------------------
 
-    required = [
+INSTRUCTIONS = [
+    "Assist portfolio companies in focusing on key items required for a successful exit.",
+    "Provide guidance based on an uploaded file of recommendations.",
+    "Ensure companies prioritize critical aspects such as financial readiness, operational efficiency, market positioning, and legal compliance.",
+    "Offer strategic insights, practical action steps, and tailored advice.",
+    "Reference the uploaded document to provide consistent and relevant recommendations.",
+    "Allow for further clarification and discussion as needed.",
+    "Support the interactive feature of adding documents for analysis.",
+    "Utilize historic monthly and quarterly operational reports to build greater context for the pace of performance.",
+    "Gauge if the pace of performance is improving based on the uploaded files.",
+    "Periodically incorporate additional files uploaded by the user.",
+]
+
+
+# ----------------------------------------------------------------------
+# YAML helpers
+# ----------------------------------------------------------------------
+
+def load_yaml(path: Path) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} does not contain a YAML mapping.")
+
+    return data
+
+
+def write_yaml(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            data,
+            f,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+            width=1000,
+        )
+
+
+# ----------------------------------------------------------------------
+# Locate Microsoft-generated files
+# ----------------------------------------------------------------------
+
+def find_single_file(agent_dir: Path, filenames: list[str]) -> Path:
+    matches = []
+
+    for filename in filenames:
+        matches.extend(agent_dir.rglob(filename))
+
+    matches = list(dict.fromkeys(matches))
+
+    if not matches:
+        raise FileNotFoundError(
+            f"Could not find {' or '.join(filenames)} under {agent_dir}"
+        )
+
+    if len(matches) > 1:
+        print("Multiple matching files found:")
+        for match in matches:
+            print(f"  {match}")
+
+        raise RuntimeError(
+            f"Expected exactly one matching file under {agent_dir}"
+        )
+
+    return matches[0]
+
+
+# ----------------------------------------------------------------------
+# Company configuration
+# ----------------------------------------------------------------------
+
+def validate_company_config(config: dict) -> None:
+    required_fields = [
         "companyName",
         "agentDisplayName",
         "agentComponentName",
@@ -19,345 +100,411 @@ def load_config(config_file: Path):
         "dynamicsAgentDescription",
     ]
 
-    missing = [key for key in required if not config.get(key)]
+    missing = [
+        field
+        for field in required_fields
+        if not config.get(field)
+    ]
 
     if missing:
-        raise RuntimeError(
-            "Missing configuration values: " + ", ".join(missing)
+        raise ValueError(
+            "Missing required company config fields: "
+            + ", ".join(missing)
         )
 
-    return config
 
+# ----------------------------------------------------------------------
+# Shared sample prompts
+# ----------------------------------------------------------------------
 
-def get_schema_name(settings_file: Path):
-    text = settings_file.read_text(encoding="utf-8")
+def load_sample_prompts(prompt_config: dict) -> list[dict]:
+    prompts = prompt_config.get("samplePrompts")
 
-    match = re.search(
-        r"(?m)^schemaName:\s*(.+?)\s*$",
-        text
-    )
-
-    if not match:
-        raise RuntimeError(
-            f"Could not find schemaName in {settings_file}"
+    if not isinstance(prompts, list) or not prompts:
+        raise ValueError(
+            "shared/sample_prompts.yml must contain "
+            "a non-empty 'samplePrompts' list."
         )
 
-    return match.group(1).strip()
+    starters = []
 
+    for index, prompt in enumerate(prompts, start=1):
 
-def get_template_type(settings_file: Path):
-    text = settings_file.read_text(encoding="utf-8")
+        if isinstance(prompt, dict):
+            title = prompt.get("title")
+            text = prompt.get("text")
 
-    match = re.search(
-        r"(?m)^template:\s*(.+?)\s*$",
-        text
-    )
+            if not title or not text:
+                raise ValueError(
+                    f"Sample prompt #{index} must contain "
+                    "'title' and 'text'."
+                )
 
-    if not match:
-        return None
+            starters.append(
+                {
+                    "$kind": "ConversationStarter",
+                    "title": str(title),
+                    "text": str(text),
+                }
+            )
 
-    return match.group(1).strip()
+        elif isinstance(prompt, str):
+            prompt_text = prompt.strip()
 
+            if not prompt_text:
+                continue
 
-def extract_evention_instructions(source_agent_file: Path):
-    """
-    Extract the multiline instructions block from the classic
-    Evention agent.mcs.yml without reserializing Microsoft's YAML.
-    """
+            words = prompt_text.rstrip("?.!").split()
+            title = " ".join(words[:6])
 
-    text = source_agent_file.read_text(encoding="utf-8")
+            if len(words) > 6:
+                title += "..."
 
-    match = re.search(
-        r"(?ms)^instructions:\s*\|-\s*\n"
-        r"(?P<body>.*?)(?=^[A-Za-z][A-Za-z0-9]*:\s*)",
-        text,
-    )
+            starters.append(
+                {
+                    "$kind": "ConversationStarter",
+                    "title": title,
+                    "text": prompt_text,
+                }
+            )
 
-    if not match:
-        # Fallback for instructions block at end of file
-        match = re.search(
-            r"(?ms)^instructions:\s*\|-\s*\n(?P<body>.*)$",
-            text,
-        )
-
-    if not match:
-        raise RuntimeError(
-            f"Could not find instructions block in {source_agent_file}"
-        )
-
-    body = match.group("body")
-
-    # Remove the indentation used beneath `instructions: |-`
-    lines = body.splitlines()
-
-    cleaned = []
-
-    for line in lines:
-        if line.startswith("  "):
-            cleaned.append(line[2:])
         else:
-            cleaned.append(line)
+            raise ValueError(
+                f"Invalid sample prompt #{index}: {prompt}"
+            )
 
-    return "\n".join(cleaned).rstrip()
+    if not starters:
+        raise ValueError("No valid sample prompts were found.")
 
-
-def transform_instructions(
-    instructions: str,
-    source_company: str,
-    target_company: str,
-):
-    """
-    Replace explicit references to the template company if any exist.
-    Generic instructions remain unchanged.
-    """
-
-    if source_company and source_company != target_company:
-        instructions = instructions.replace(
-            source_company,
-            target_company
+    if len(starters) > 10:
+        raise ValueError(
+            "Maximum supported sample prompts is 10."
         )
 
-    return instructions
+    return starters
 
 
-def update_display_name(
-    settings_text: str,
-    display_name: str,
-):
-    new_text, count = re.subn(
-        r"(?m)^displayName:\s*.*$",
-        f"displayName: {display_name}",
-        settings_text,
-        count=1,
+# ----------------------------------------------------------------------
+# settings.mcs.yml
+# ----------------------------------------------------------------------
+
+def update_settings_file(
+    settings_path: Path,
+    conversation_starters: list[dict],
+) -> None:
+
+    settings = load_yaml(settings_path)
+
+    # ------------------------------------------------------------------
+    # Remove obsolete root-level model block left by prior builder.
+    #
+    # In the modern cliagent layout, instructions belong under:
+    #
+    # configuration:
+    #   agentSettings:
+    #     instructions:
+    #
+    # The actual model selection remains under agentSettings.model.
+    # ------------------------------------------------------------------
+
+    settings.pop("model", None)
+
+    configuration = settings.setdefault(
+        "configuration",
+        {}
     )
 
-    if count != 1:
-        raise RuntimeError(
-            "Could not uniquely update displayName "
-            "in target settings.mcs.yml"
-        )
-
-    return new_text
-
-
-def build_instruction_block(instructions: str):
-    """
-    Build the CLI-agent instruction structure while preserving
-    Microsoft's surrounding settings file.
-    """
-
-    lines = instructions.splitlines()
-
-    indented_body = "\n".join(
-        f"          {line}" if line else ""
-        for line in lines
+    agent_settings = configuration.setdefault(
+        "agentSettings",
+        {}
     )
 
-    return (
-        "    instructions:\n"
-        "      segments:\n"
-        "        - kind: StaticSegment\n"
-        "          value: |-\n"
-        f"{indented_body}"
+    # ------------------------------------------------------------------
+    # Instructions
+    # ------------------------------------------------------------------
+
+    agent_settings["instructions"] = {
+        "segments": [
+            {
+                "kind": "StaticSegment",
+                "value": "\n".join(
+                    f"- {instruction}"
+                    for instruction in INSTRUCTIONS
+                ),
+            }
+        ]
+    }
+
+    # ------------------------------------------------------------------
+    # Conversation starters
+    # ------------------------------------------------------------------
+
+    agent_settings["conversationStarters"] = (
+        conversation_starters
     )
 
+    write_yaml(settings_path, settings)
 
-def replace_instruction_block(
-    settings_text: str,
-    instructions: str,
-):
-    """
-    Replace either:
-
-        instructions: {}
-
-    or an existing instructions block beneath agentSettings.
-    """
-
-    new_block = build_instruction_block(instructions)
-
-    # Most freshly-created CLI agents have this.
-    if re.search(
-        r"(?m)^    instructions:\s*\{\}\s*$",
-        settings_text,
-    ):
-        return re.sub(
-            r"(?m)^    instructions:\s*\{\}\s*$",
-            new_block,
-            settings_text,
-            count=1,
-        )
-
-    # Existing generated instructions block.
-    pattern = (
-        r"(?ms)^    instructions:\s*\n"
-        r".*?"
-        r"(?=^    [A-Za-z][A-Za-z0-9]*:\s*)"
-    )
-
-    if re.search(pattern, settings_text):
-        return re.sub(
-            pattern,
-            new_block + "\n",
-            settings_text,
-            count=1,
-        )
-
-    raise RuntimeError(
-        "Could not locate the target instructions section "
-        "in settings.mcs.yml"
+    print("Updated settings:")
+    print(f"  {settings_path}")
+    print(
+        f"  Conversation starters: "
+        f"{len(conversation_starters)}"
     )
 
 
-def main():
+# ----------------------------------------------------------------------
+# SharePoint Knowledge
+# ----------------------------------------------------------------------
+
+def create_sharepoint_knowledge(
+    agent_dir: Path,
+    company_config: dict,
+) -> Path:
+
+    # Modern cliagent layout:
+    #
+    # capabilities/
+    #   knowledge/
+    #
+
+    knowledge_dir = (
+        agent_dir
+        / "capabilities"
+        / "knowledge"
+    )
+
+    knowledge_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    knowledge_path = (
+        knowledge_dir
+        / "company-sharepoint.mcs.yml"
+    )
+
+    knowledge = {
+        "mcs.metadata": {
+            "componentName": company_config[
+                "companySharePointName"
+            ],
+            "description": (
+                f"SharePoint knowledge source for "
+                f"{company_config['companyName']}"
+            ),
+        },
+        "kind": "KnowledgeSourceConfiguration",
+        "source": {
+            "kind": "SharePointSearchSource",
+            "site": company_config["sharePointUrl"],
+        },
+    }
+
+    write_yaml(
+        knowledge_path,
+        knowledge,
+    )
+
+    print("Updated SharePoint knowledge:")
+    print(f"  {knowledge_path}")
+    print(
+        f"  {company_config['sharePointUrl']}"
+    )
+
+    return knowledge_path
+
+
+# ----------------------------------------------------------------------
+# Remove legacy knowledge file generated by earlier builder
+# ----------------------------------------------------------------------
+
+def remove_legacy_knowledge_file(
+    agent_dir: Path,
+) -> None:
+
+    legacy_path = (
+        agent_dir
+        / "knowledge"
+        / "company-sharepoint.knowledge.mcs.yml"
+    )
+
+    if legacy_path.exists():
+        legacy_path.unlink()
+
+        print("Removed legacy knowledge file:")
+        print(f"  {legacy_path}")
+
+        legacy_dir = legacy_path.parent
+
+        try:
+            legacy_dir.rmdir()
+        except OSError:
+            pass
+
+
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
+
+def main() -> None:
+
     parser = argparse.ArgumentParser(
         description=(
-            "Populate a Microsoft-created portfolio agent shell "
-            "from the Evention template."
+            "Build a company-specific Portfolio Analyst "
+            "from an existing Copilot Studio cliagent workspace."
         )
     )
 
     parser.add_argument(
         "company",
-        help="Company config name, e.g. miva"
+        help="Company config name. Example: miva",
     )
 
     parser.add_argument(
-        "--source-dir",
-        default="Portfolio Analyst Evention",
-        help="Source/template agent directory"
-    )
-
-    parser.add_argument(
-        "--target-dir",
+        "--agent-dir",
         required=True,
-        help="Microsoft-created target agent directory"
-    )
-
-    parser.add_argument(
-        "--source-company",
-        default="Evention",
-        help="Company name used by the source template"
+        help=(
+            "Existing Microsoft Copilot Studio "
+            "agent directory."
+        ),
     )
 
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent
 
-    config_file = (
+    company_file = (
         repo_root
         / "companies"
         / f"{args.company}.yml"
     )
 
-    source_dir = repo_root / args.source_dir
-    target_dir = repo_root / args.target_dir
+    sample_prompts_file = (
+        repo_root
+        / "shared"
+        / "sample_prompts.yml"
+    )
 
-    if not config_file.exists():
-        print(f"Config file not found: {config_file}")
-        sys.exit(1)
+    agent_dir = (
+        repo_root
+        / args.agent_dir
+    ).resolve()
 
-    if not source_dir.exists():
-        print(f"Source directory not found: {source_dir}")
-        sys.exit(1)
+    # ------------------------------------------------------------------
+    # Validate inputs
+    # ------------------------------------------------------------------
 
-    if not target_dir.exists():
-        print(f"Target directory not found: {target_dir}")
-        sys.exit(1)
-
-    config = load_config(config_file)
-
-    source_agent_file = source_dir / "agent.mcs.yml"
-    target_settings_file = target_dir / "settings.mcs.yml"
-
-    if not source_agent_file.exists():
-        raise RuntimeError(
-            f"Source agent.mcs.yml not found: {source_agent_file}"
+    if not agent_dir.exists():
+        raise FileNotFoundError(
+            f"Agent directory not found: {agent_dir}"
         )
 
-    if not target_settings_file.exists():
-        raise RuntimeError(
-            f"Target settings.mcs.yml not found: {target_settings_file}"
-        )
+    company_config = load_yaml(
+        company_file
+    )
 
-    schema_name = get_schema_name(target_settings_file)
-    template_type = get_template_type(target_settings_file)
+    validate_company_config(
+        company_config
+    )
+
+    sample_prompt_config = load_yaml(
+        sample_prompts_file
+    )
+
+    conversation_starters = load_sample_prompts(
+        sample_prompt_config
+    )
+
+    # ------------------------------------------------------------------
+    # Locate settings file
+    # ------------------------------------------------------------------
+
+    settings_path = find_single_file(
+        agent_dir,
+        [
+            "settings.mcs.yml",
+            "settings.mcs.yaml",
+        ],
+    )
+
+    # ------------------------------------------------------------------
+    # Apply template
+    # ------------------------------------------------------------------
+
+    update_settings_file(
+        settings_path,
+        conversation_starters,
+    )
+
+    remove_legacy_knowledge_file(
+        agent_dir,
+    )
+
+    create_sharepoint_knowledge(
+        agent_dir,
+        company_config,
+    )
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
 
     print()
-    print("=" * 64)
-    print(f"Building {config['agentDisplayName']}")
-    print("=" * 64)
-    print()
-    print(f"Source: {source_dir.name}")
-    print(f"Target: {target_dir.name}")
-    print(f"Microsoft schema preserved: {schema_name}")
-    print(f"Target template: {template_type}")
-    print()
+    print("=" * 60)
+    print("BUILD COMPLETE")
+    print("=" * 60)
 
-    if template_type != "cliagent-1.0.0":
-        raise RuntimeError(
-            "Target does not appear to be a cliagent-1.0.0 shell. "
-            "Stopping rather than modifying an unexpected agent format."
-        )
-
-    instructions = extract_evention_instructions(
-        source_agent_file
-    )
-
-    instructions = transform_instructions(
-        instructions,
-        args.source_company,
-        config["companyName"],
-    )
-
-    settings_text = target_settings_file.read_text(
-        encoding="utf-8"
-    )
-
-    settings_text = update_display_name(
-        settings_text,
-        config["agentDisplayName"],
-    )
-
-    settings_text = replace_instruction_block(
-        settings_text,
-        instructions,
-    )
-
-    target_settings_file.write_text(
-        settings_text,
-        encoding="utf-8"
-    )
-
-    print("Updated:")
-    print(f"  displayName -> {config['agentDisplayName']}")
     print(
-        f"  instructions -> copied from "
-        f"{source_dir.name}/agent.mcs.yml"
+        f"Company:      "
+        f"{company_config['companyName']}"
+    )
+
+    print(
+        f"Agent:        "
+        f"{company_config['agentDisplayName']}"
+    )
+
+    print(
+        f"Prompts:      "
+        f"{len(conversation_starters)}"
+    )
+
+    print(
+        f"SharePoint:   "
+        f"{company_config['sharePointUrl']}"
     )
 
     print()
-    print("Preserved:")
-    print(f"  schemaName -> {schema_name}")
-    print(f"  template -> {template_type}")
-    print("  authentication configuration")
-    print("  model configuration")
-    print("  Microsoft-generated agent identity")
+    print("agent.sync.yaml was not modified.")
+    print("Root-level model.instructions was removed.")
+    print("Knowledge written under capabilities/knowledge/.")
     print()
+    print("Next:")
+    print("  git status")
+    print("  git diff")
+    print()
+    print(
+        "Review the diff before committing or "
+        "pushing to Copilot Studio."
+    )
 
-    print("NOT migrated yet:")
-    print("  SharePoint knowledge source")
-    print("  public website knowledge source")
-    print("  Dynamics 365 agent/tool")
-    print("  classic topics")
-    print("  conversation starters")
-    print()
-    print("Those require translation from the classic Evention")
-    print("agent format into the new CLI-agent format.")
-    print()
-    print("Build complete.")
-    print()
 
+# ----------------------------------------------------------------------
+# Entry point
+# ----------------------------------------------------------------------
 
 if __name__ == "__main__":
-    main()
+
+    try:
+        main()
+
+    except Exception as exc:
+
+        print()
+        print(
+            f"ERROR: {exc}",
+            file=sys.stderr,
+        )
+
+        sys.exit(1)

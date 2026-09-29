@@ -1,0 +1,18 @@
+samplePrompts:
+  - title: Latest board issues
+    text: Find the latest board materials and summarize the key operating issues.
+
+  - title: Current EAM priorities
+    text: What are the current EAM priorities and what has changed in the last quarter?
+
+  - title: Performance vs. plan
+    text: Summarize the latest performance against budget and prior quarter.
+
+  - title: Exit readiness risks
+    text: What are the biggest risks to exit readiness based on the latest available materials?
+
+  - title: Prepare for board meeting
+    text: Prepare me for the next board meeting using the latest board materials, operating reports, and available KPI trends.
+
+  - title: Pace of performance
+    text: How has the pace of performance changed over the last three quarters?

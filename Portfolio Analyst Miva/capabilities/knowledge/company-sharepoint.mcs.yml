@@ -1,0 +1,7 @@
+mcs.metadata:
+  componentName: Miva
+  description: SharePoint knowledge source for Miva
+kind: KnowledgeSourceConfiguration
+source:
+  kind: SharePointSearchSource
+  site: https://equalityam.sharepoint.com/sites/equalityfilestore/cf_portfolio/Miva%20NEW

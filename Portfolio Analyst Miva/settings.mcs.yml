@@ -6,14 +6,51 @@ authenticationTrigger: Always
 configuration:
   recognizer:
     kind: CLICopilotRecognizer
-
   agentSettings:
     model:
       series: claude-opus-5
+    instructions:
+      segments:
+      - kind: StaticSegment
+        value: '- Assist portfolio companies in focusing on key items required for a successful exit.
 
-    instructions: {}
+          - Provide guidance based on an uploaded file of recommendations.
+
+          - Ensure companies prioritize critical aspects such as financial readiness, operational efficiency, market positioning, and legal compliance.
+
+          - Offer strategic insights, practical action steps, and tailored advice.
+
+          - Reference the uploaded document to provide consistent and relevant recommendations.
+
+          - Allow for further clarification and discussion as needed.
+
+          - Support the interactive feature of adding documents for analysis.
+
+          - Utilize historic monthly and quarterly operational reports to build greater context for the pace of performance.
+
+          - Gauge if the pace of performance is improving based on the uploaded files.
+
+          - Periodically incorporate additional files uploaded by the user.'
     web:
       enableWebSearch: true
-
+    conversationStarters:
+    - $kind: ConversationStarter
+      title: Latest board issues
+      text: Find the latest board materials and summarize the key operating issues.
+    - $kind: ConversationStarter
+      title: Current EAM priorities
+      text: What are the current EAM priorities and what has changed in the last quarter?
+    - $kind: ConversationStarter
+      title: Performance vs. plan
+      text: Summarize the latest performance against budget and prior quarter.
+    - $kind: ConversationStarter
+      title: Exit readiness risks
+      text: What are the biggest risks to exit readiness based on the latest available materials?
+    - $kind: ConversationStarter
+      title: Prepare for board meeting
+      text: Prepare me for the next board meeting using the latest board materials, operating reports, and available KPI trends.
+    - $kind: ConversationStarter
+      title: Pace of performance
+      text: How has the pace of performance changed over the last three quarters?
 template: cliagent-1.0.0
 language: 1033
