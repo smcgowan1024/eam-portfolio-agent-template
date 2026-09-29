@@ -1,0 +1,7 @@
+mcs.metadata:
+  componentName: Evention NEW
+  description: This knowledge source provides information found in Evention NEW SharePoint.
+kind: KnowledgeSourceConfiguration
+source:
+  kind: SharePointSearchSource
+  site: https://equalityam.sharepoint.com/sites/equalityfilestore/cf_portfolio/Evention%20NEW

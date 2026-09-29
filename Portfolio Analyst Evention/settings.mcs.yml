@@ -1,0 +1,17 @@
+displayName: Portfolio Analyst - Evention
+schemaName: crcc1_portfolioAnalystEvention
+accessControlPolicy: Any
+authenticationMode: Integrated
+authenticationTrigger: Always
+configuration:
+  gPTSettings:
+    defaultSchemaName: crcc1_portfolioAnalystEvention.gpt.default
+
+  aISettings:
+    useModelKnowledge: true
+    isSemanticSearchEnabled: true
+    optInUseLatestModels: false
+
+publishedOn: 2026-09-29T11:12:43.0000000Z
+template: default-2.1.0
+language: 1033
