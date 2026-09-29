@@ -1,4 +1,4 @@
-displayName: Portfolio Analyst - Evention
+displayName: { { agentDisplayName } }
 schemaName: crcc1_portfolioAnalystEvention
 accessControlPolicy: Any
 authenticationMode: Integrated
