@@ -91,7 +91,7 @@ def validate_defaults(defaults: dict) -> None:
 
 
 # ----------------------------------------------------------------------
-# Shared suggested prompts
+# Shared prompts
 # ----------------------------------------------------------------------
 
 def load_sample_prompts(prompt_config: dict) -> list[dict]:
@@ -166,8 +166,17 @@ def update_agent(
 
     agent = load_yaml(agent_path)
 
-    # Preserve all Microsoft-generated identity and model information.
-    # Only update the common fields owned by our Portfolio Analyst template.
+    # --------------------------------------------------------------
+    # Remove any stale root-level description from earlier builds.
+    # Working Evention schema proves description belongs under
+    # mcs.metadata.
+    # --------------------------------------------------------------
+
+    agent.pop("description", None)
+
+    # --------------------------------------------------------------
+    # Metadata
+    # --------------------------------------------------------------
 
     metadata = agent.setdefault("mcs.metadata", {})
 
@@ -175,14 +184,37 @@ def update_agent(
         company_config["agentComponentName"]
     )
 
-    agent["description"] = str(
+    metadata["description"] = str(
         defaults["description"]
     ).strip()
+
+    # --------------------------------------------------------------
+    # Component type
+    # --------------------------------------------------------------
+
+    agent["kind"] = "GptComponentMetadata"
+
+    # --------------------------------------------------------------
+    # Instructions
+    # --------------------------------------------------------------
 
     agent["instructions"] = "\n".join(
         f"- {instruction}"
         for instruction in defaults["instructions"]
     )
+
+    # --------------------------------------------------------------
+    # GPT capabilities
+    #
+    # Preserve whatever the target Standard agent already has.
+    # --------------------------------------------------------------
+
+    if "gptCapabilities" not in agent:
+        agent["gptCapabilities"] = {}
+
+    # --------------------------------------------------------------
+    # Conversation starters
+    # --------------------------------------------------------------
 
     agent["conversationStarters"] = [
         {
@@ -192,11 +224,22 @@ def update_agent(
         for prompt in sample_prompts
     ]
 
+    # --------------------------------------------------------------
+    # Model settings
+    #
+    # Preserve Microsoft-generated model choice.
+    # --------------------------------------------------------------
+
+    if "aISettings" not in agent:
+        agent["aISettings"] = {
+            "model": {}
+        }
+
     write_yaml(agent_path, agent)
 
     print("Updated Standard agent:")
     print(f"  {agent_path}")
-    print(f"  Description: yes")
+    print("  Description: yes")
     print(
         f"  Instructions: "
         f"{len(defaults['instructions'])}"
@@ -208,7 +251,7 @@ def update_agent(
 
 
 # ----------------------------------------------------------------------
-# Knowledge sources
+# Knowledge helpers
 # ----------------------------------------------------------------------
 
 def find_template_knowledge_file(
@@ -281,7 +324,6 @@ def build_sharepoint_knowledge(
 
     print("Updated SharePoint knowledge:")
     print(f"  {destination}")
-    print(f"  {company_config['sharePointUrl']}")
 
 
 def build_website_knowledge(
@@ -297,14 +339,12 @@ def build_website_knowledge(
 
     knowledge = load_yaml(template_path)
 
-    metadata = knowledge.get("mcs.metadata")
-
-    if isinstance(metadata, dict):
-        metadata["componentName"] = (
+    if isinstance(knowledge.get("mcs.metadata"), dict):
+        knowledge["mcs.metadata"]["componentName"] = (
             f"{company_config['companyName']} Website"
         )
 
-        metadata["description"] = (
+        knowledge["mcs.metadata"]["description"] = (
             f"Public website knowledge source for "
             f"{company_config['companyName']}."
         )
@@ -324,7 +364,6 @@ def build_website_knowledge(
 
     print("Updated website knowledge:")
     print(f"  {destination}")
-    print(f"  {company_config['companyUrl']}")
 
 
 # ----------------------------------------------------------------------
@@ -391,10 +430,7 @@ def copy_connection_references(
     )
 
     if not source.exists():
-        print(
-            "No Evention connectionreferences.mcs.yml found; "
-            "skipping."
-        )
+        print("No connection references found; skipping.")
         return
 
     shutil.copyfile(source, destination)
@@ -424,9 +460,7 @@ def main() -> None:
     parser.add_argument(
         "--agent-dir",
         required=True,
-        help=(
-            "Existing Standard Copilot Studio agent directory."
-        ),
+        help="Existing Standard Copilot Studio agent directory.",
     )
 
     parser.add_argument(
@@ -471,7 +505,7 @@ def main() -> None:
     ).resolve()
 
     # ------------------------------------------------------------------
-    # Validate folders
+    # Validate target
     # ------------------------------------------------------------------
 
     if not target_dir.exists():
@@ -567,41 +601,30 @@ def main() -> None:
     print("=" * 64)
 
     print(
-        f"Company:          "
+        f"Company:           "
         f"{company_config['companyName']}"
     )
 
     print(
-        f"Agent:            "
+        f"Agent:             "
         f"{company_config['agentDisplayName']}"
     )
 
     print(
-        f"Instructions:     "
+        f"Instructions:      "
         f"{len(defaults['instructions'])}"
     )
 
     print(
-        f"Suggested prompts:"
-        f" {len(sample_prompts)}"
-    )
-
-    print(
-        f"SharePoint:       "
-        f"{company_config['sharePointUrl']}"
-    )
-
-    print(
-        f"Website:          "
-        f"{company_config['companyUrl']}"
+        f"Suggested prompts: "
+        f"{len(sample_prompts)}"
     )
 
     print()
-    print("Not modified:")
-    print("  settings.mcs.yml")
-    print("  system topics")
-    print("  Microsoft-generated agent identity")
-    print("  model selection")
+    print("Description written to mcs.metadata.description.")
+    print("Stale root-level description removed.")
+    print("Conversation starters written to agent.mcs.yml.")
+    print("Existing model selection preserved.")
     print()
     print("Next:")
     print("  git status")
