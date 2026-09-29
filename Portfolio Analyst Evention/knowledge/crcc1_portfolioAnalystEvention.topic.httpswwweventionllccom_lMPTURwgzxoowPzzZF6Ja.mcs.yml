@@ -1,10 +1,10 @@
 # Website knowledge template
 mcs.metadata:
-  componentName: { { companyUrl } }
-  description: This knowledge source searches information on the web found in {{ companyUrl }} website
+  componentName: https://www.eventionllc.com/
+  description: This knowledge source searches information on the web found in https://www.eventionllc.com/ website
 
 kind: KnowledgeSourceConfiguration
 
 source:
   kind: PublicSiteSearchSource
-  site: { { companyUrl } }
+  site: https://www.eventionllc.com/
