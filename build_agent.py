@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,15 +15,15 @@ import yaml
 
 INSTRUCTIONS = [
     "Assist portfolio companies in focusing on key items required for a successful exit.",
-    "Provide guidance based on an uploaded file of recommendations.",
+    "Provide guidance based on uploaded recommendations and company materials.",
     "Ensure companies prioritize critical aspects such as financial readiness, operational efficiency, market positioning, and legal compliance.",
     "Offer strategic insights, practical action steps, and tailored advice.",
-    "Reference the uploaded document to provide consistent and relevant recommendations.",
+    "Reference available company documents to provide consistent and relevant recommendations.",
     "Allow for further clarification and discussion as needed.",
-    "Support the interactive feature of adding documents for analysis.",
-    "Utilize historic monthly and quarterly operational reports to build greater context for the pace of performance.",
-    "Gauge if the pace of performance is improving based on the uploaded files.",
-    "Periodically incorporate additional files uploaded by the user.",
+    "Support interactive analysis of documents provided by the user.",
+    "Utilize historic monthly and quarterly operational reports to build context for the pace of performance.",
+    "Gauge whether the pace of performance is improving based on available historical materials.",
+    "Incorporate additional company materials as they become available.",
 ]
 
 
@@ -56,41 +58,24 @@ def write_yaml(path: Path, data: dict) -> None:
         )
 
 
-# ----------------------------------------------------------------------
-# Locate Microsoft-generated files
-# ----------------------------------------------------------------------
+def read_text(path: Path) -> str:
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
 
-def find_single_file(agent_dir: Path, filenames: list[str]) -> Path:
-    matches = []
+    return path.read_text(encoding="utf-8")
 
-    for filename in filenames:
-        matches.extend(agent_dir.rglob(filename))
 
-    matches = list(dict.fromkeys(matches))
-
-    if not matches:
-        raise FileNotFoundError(
-            f"Could not find {' or '.join(filenames)} under {agent_dir}"
-        )
-
-    if len(matches) > 1:
-        print("Multiple matching files found:")
-        for match in matches:
-            print(f"  {match}")
-
-        raise RuntimeError(
-            f"Expected exactly one matching file under {agent_dir}"
-        )
-
-    return matches[0]
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 # ----------------------------------------------------------------------
-# Company configuration
+# Company config
 # ----------------------------------------------------------------------
 
 def validate_company_config(config: dict) -> None:
-    required_fields = [
+    required = [
         "companyName",
         "agentDisplayName",
         "agentComponentName",
@@ -100,11 +85,7 @@ def validate_company_config(config: dict) -> None:
         "dynamicsAgentDescription",
     ]
 
-    missing = [
-        field
-        for field in required_fields
-        if not config.get(field)
-    ]
+    missing = [key for key in required if not config.get(key)]
 
     if missing:
         raise ValueError(
@@ -114,7 +95,7 @@ def validate_company_config(config: dict) -> None:
 
 
 # ----------------------------------------------------------------------
-# Shared sample prompts
+# Shared prompts
 # ----------------------------------------------------------------------
 
 def load_sample_prompts(prompt_config: dict) -> list[dict]:
@@ -123,10 +104,10 @@ def load_sample_prompts(prompt_config: dict) -> list[dict]:
     if not isinstance(prompts, list) or not prompts:
         raise ValueError(
             "shared/sample_prompts.yml must contain "
-            "a non-empty 'samplePrompts' list."
+            "a non-empty samplePrompts list."
         )
 
-    starters = []
+    result = []
 
     for index, prompt in enumerate(prompts, start=1):
 
@@ -136,35 +117,32 @@ def load_sample_prompts(prompt_config: dict) -> list[dict]:
 
             if not title or not text:
                 raise ValueError(
-                    f"Sample prompt #{index} must contain "
-                    "'title' and 'text'."
+                    f"Prompt #{index} must contain title and text."
                 )
 
-            starters.append(
+            result.append(
                 {
-                    "$kind": "ConversationStarter",
                     "title": str(title),
                     "text": str(text),
                 }
             )
 
         elif isinstance(prompt, str):
-            prompt_text = prompt.strip()
+            text = prompt.strip()
 
-            if not prompt_text:
+            if not text:
                 continue
 
-            words = prompt_text.rstrip("?.!").split()
+            words = text.rstrip("?.!").split()
             title = " ".join(words[:6])
 
             if len(words) > 6:
                 title += "..."
 
-            starters.append(
+            result.append(
                 {
-                    "$kind": "ConversationStarter",
                     "title": title,
-                    "text": prompt_text,
+                    "text": text,
                 }
             )
 
@@ -173,174 +151,246 @@ def load_sample_prompts(prompt_config: dict) -> list[dict]:
                 f"Invalid sample prompt #{index}: {prompt}"
             )
 
-    if not starters:
-        raise ValueError("No valid sample prompts were found.")
-
-    if len(starters) > 10:
-        raise ValueError(
-            "Maximum supported sample prompts is 10."
-        )
-
-    return starters
+    return result
 
 
 # ----------------------------------------------------------------------
-# settings.mcs.yml
+# Standard agent.mcs.yml
 # ----------------------------------------------------------------------
 
-def update_settings_file(
-    settings_path: Path,
-    conversation_starters: list[dict],
+def update_standard_agent(
+    agent_path: Path,
+    company_config: dict,
+    sample_prompts: list[dict],
 ) -> None:
 
-    settings = load_yaml(settings_path)
+    agent = load_yaml(agent_path)
 
-    # ------------------------------------------------------------------
-    # Remove obsolete root-level model block left by prior builder.
-    #
-    # In the modern cliagent layout, instructions belong under:
-    #
-    # configuration:
-    #   agentSettings:
-    #     instructions:
-    #
-    # The actual model selection remains under agentSettings.model.
-    # ------------------------------------------------------------------
+    # Preserve Microsoft-generated schemaName and identity.
+    # Only change the fields we own.
 
-    settings.pop("model", None)
+    if "displayName" in agent:
+        agent["displayName"] = company_config["agentDisplayName"]
 
-    configuration = settings.setdefault(
-        "configuration",
-        {}
+    if "description" in agent:
+        agent["description"] = (
+            f"Portfolio analyst for {company_config['companyName']}."
+        )
+
+    # Standard agents store authored instructions here.
+    agent["instructions"] = "\n".join(
+        f"- {instruction}"
+        for instruction in INSTRUCTIONS
     )
 
-    agent_settings = configuration.setdefault(
-        "agentSettings",
-        {}
-    )
+    # Standard conversation starters.
+    starters = []
 
-    # ------------------------------------------------------------------
-    # Instructions
-    # ------------------------------------------------------------------
-
-    agent_settings["instructions"] = {
-        "segments": [
+    for prompt in sample_prompts:
+        starters.append(
             {
-                "kind": "StaticSegment",
-                "value": "\n".join(
-                    f"- {instruction}"
-                    for instruction in INSTRUCTIONS
-                ),
+                "title": prompt["title"],
+                "text": prompt["text"],
             }
-        ]
+        )
+
+    agent["conversationStarters"] = starters
+
+    write_yaml(agent_path, agent)
+
+    print(f"Updated Standard agent:")
+    print(f"  {agent_path}")
+    print(f"  Prompts: {len(starters)}")
+
+
+# ----------------------------------------------------------------------
+# Token substitution for proven Evention components
+# ----------------------------------------------------------------------
+
+def substitute_evention_values(
+    content: str,
+    company_config: dict,
+) -> str:
+
+    company = company_config["companyName"]
+    display_name = company_config["agentDisplayName"]
+    component_name = company_config["agentComponentName"]
+    sharepoint_name = company_config["companySharePointName"]
+    company_url = company_config["companyUrl"]
+    sharepoint_url = company_config["sharePointUrl"]
+    dynamics_description = company_config["dynamicsAgentDescription"]
+
+    replacements = {
+        "Portfolio Analyst Evention": display_name,
+        "PortfolioAnalystEvention": component_name.replace(" ", ""),
+        "portfolioAnalystEvention": component_name.replace(" ", ""),
+        "portfolioanalystevention": component_name.replace(" ", "").lower(),
+        "Evention NEW": sharepoint_name,
+        "Evention": company,
+        "https://www.eventionllc.com/": company_url,
+        "https://www.eventionllc.com": company_url.rstrip("/"),
+        "Dynamics Agent for Evention": dynamics_description,
     }
 
-    # ------------------------------------------------------------------
-    # Conversation starters
-    # ------------------------------------------------------------------
+    for old, new in replacements.items():
+        content = content.replace(old, new)
 
-    agent_settings["conversationStarters"] = (
-        conversation_starters
+    # Replace any Evention SharePoint URL with the company SharePoint URL.
+    content = re.sub(
+        r"https://equalityam\.sharepoint\.com/[^\s'\"<>]+Evention[^\s'\"<>]*",
+        sharepoint_url,
+        content,
+        flags=re.IGNORECASE,
     )
 
-    write_yaml(settings_path, settings)
-
-    print("Updated settings:")
-    print(f"  {settings_path}")
-    print(
-        f"  Conversation starters: "
-        f"{len(conversation_starters)}"
-    )
+    return content
 
 
 # ----------------------------------------------------------------------
-# SharePoint Knowledge
+# Copy proven Evention Standard components
 # ----------------------------------------------------------------------
 
-def create_sharepoint_knowledge(
-    agent_dir: Path,
+def copy_evention_component(
+    source: Path,
+    destination: Path,
     company_config: dict,
-) -> Path:
+) -> None:
 
-    # Modern cliagent layout:
-    #
-    # capabilities/
-    #   knowledge/
-    #
+    content = read_text(source)
 
-    knowledge_dir = (
-        agent_dir
-        / "capabilities"
+    updated = substitute_evention_values(
+        content,
+        company_config,
+    )
+
+    write_text(
+        destination,
+        updated,
+    )
+
+    print(f"Created:")
+    print(f"  {destination}")
+
+
+def build_standard_components(
+    evention_dir: Path,
+    target_dir: Path,
+    company_config: dict,
+) -> None:
+
+    # ------------------------------------------------------------------
+    # Dynamics connected agent
+    # ------------------------------------------------------------------
+
+    source_dynamics = (
+        evention_dir
+        / "agents"
+        / "CopilotinDynamics365Sales.mcs.yml"
+    )
+
+    target_dynamics = (
+        target_dir
+        / "agents"
+        / "CopilotinDynamics365Sales.mcs.yml"
+    )
+
+    copy_evention_component(
+        source_dynamics,
+        target_dynamics,
+        company_config,
+    )
+
+    # ------------------------------------------------------------------
+    # Connection references
+    # ------------------------------------------------------------------
+
+    source_connections = (
+        evention_dir
+        / "connectionreferences.mcs.yml"
+    )
+
+    target_connections = (
+        target_dir
+        / "connectionreferences.mcs.yml"
+    )
+
+    copy_evention_component(
+        source_connections,
+        target_connections,
+        company_config,
+    )
+
+    # ------------------------------------------------------------------
+    # Knowledge
+    #
+    # Use the known-good Evention knowledge files as templates.
+    # ------------------------------------------------------------------
+
+    source_knowledge_dir = (
+        evention_dir
         / "knowledge"
     )
 
-    knowledge_dir.mkdir(
+    target_knowledge_dir = (
+        target_dir
+        / "knowledge"
+    )
+
+    target_knowledge_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    knowledge_path = (
-        knowledge_dir
-        / "company-sharepoint.mcs.yml"
+    knowledge_files = sorted(
+        source_knowledge_dir.glob("*.mcs.yml")
     )
 
-    knowledge = {
-        "mcs.metadata": {
-            "componentName": company_config[
-                "companySharePointName"
-            ],
-            "description": (
-                f"SharePoint knowledge source for "
-                f"{company_config['companyName']}"
-            ),
-        },
-        "kind": "KnowledgeSourceConfiguration",
-        "source": {
-            "kind": "SharePointSearchSource",
-            "site": company_config["sharePointUrl"],
-        },
-    }
+    if not knowledge_files:
+        raise FileNotFoundError(
+            f"No Evention knowledge files found under "
+            f"{source_knowledge_dir}"
+        )
 
-    write_yaml(
-        knowledge_path,
-        knowledge,
-    )
+    for index, source_file in enumerate(
+        knowledge_files,
+        start=1,
+    ):
 
-    print("Updated SharePoint knowledge:")
-    print(f"  {knowledge_path}")
-    print(
-        f"  {company_config['sharePointUrl']}"
-    )
+        content = read_text(source_file)
 
-    return knowledge_path
+        updated = substitute_evention_values(
+            content,
+            company_config,
+        )
 
+        # Keep generated component identifiers out of the filename.
+        # Use predictable company-neutral local filenames.
+        lower = updated.lower()
 
-# ----------------------------------------------------------------------
-# Remove legacy knowledge file generated by earlier builder
-# ----------------------------------------------------------------------
+        if "sharepointsearchsource" in lower:
+            filename = "company-sharepoint.mcs.yml"
 
-def remove_legacy_knowledge_file(
-    agent_dir: Path,
-) -> None:
+        elif (
+            "publicsitesearchsource" in lower
+            or company_config["companyUrl"].lower() in lower
+        ):
+            filename = "company-website.mcs.yml"
 
-    legacy_path = (
-        agent_dir
-        / "knowledge"
-        / "company-sharepoint.knowledge.mcs.yml"
-    )
+        else:
+            filename = f"knowledge-{index}.mcs.yml"
 
-    if legacy_path.exists():
-        legacy_path.unlink()
+        destination = (
+            target_knowledge_dir
+            / filename
+        )
 
-        print("Removed legacy knowledge file:")
-        print(f"  {legacy_path}")
+        write_text(
+            destination,
+            updated,
+        )
 
-        legacy_dir = legacy_path.parent
-
-        try:
-            legacy_dir.rmdir()
-        except OSError:
-            pass
+        print(f"Created:")
+        print(f"  {destination}")
 
 
 # ----------------------------------------------------------------------
@@ -351,22 +401,31 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Build a company-specific Portfolio Analyst "
-            "from an existing Copilot Studio cliagent workspace."
+            "Build a Standard Copilot Studio Portfolio Analyst "
+            "using the working Evention Standard agent as the template."
         )
     )
 
     parser.add_argument(
         "company",
-        help="Company config name. Example: miva",
+        help="Company config name, for example: miva",
     )
 
     parser.add_argument(
         "--agent-dir",
         required=True,
         help=(
-            "Existing Microsoft Copilot Studio "
-            "agent directory."
+            "Fresh Standard target agent directory, "
+            'for example "Portfolio Analyst Miva"'
+        ),
+    )
+
+    parser.add_argument(
+        "--template-dir",
+        default="Portfolio Analyst Evention",
+        help=(
+            "Working Standard template agent directory. "
+            'Default: "Portfolio Analyst Evention"'
         ),
     )
 
@@ -380,24 +439,34 @@ def main() -> None:
         / f"{args.company}.yml"
     )
 
-    sample_prompts_file = (
+    prompts_file = (
         repo_root
         / "shared"
         / "sample_prompts.yml"
     )
 
-    agent_dir = (
+    target_dir = (
         repo_root
         / args.agent_dir
     ).resolve()
 
+    evention_dir = (
+        repo_root
+        / args.template_dir
+    ).resolve()
+
     # ------------------------------------------------------------------
-    # Validate inputs
+    # Validate
     # ------------------------------------------------------------------
 
-    if not agent_dir.exists():
+    if not target_dir.exists():
         raise FileNotFoundError(
-            f"Agent directory not found: {agent_dir}"
+            f"Target agent directory not found: {target_dir}"
+        )
+
+    if not evention_dir.exists():
+        raise FileNotFoundError(
+            f"Evention template directory not found: {evention_dir}"
         )
 
     company_config = load_yaml(
@@ -408,41 +477,42 @@ def main() -> None:
         company_config
     )
 
-    sample_prompt_config = load_yaml(
-        sample_prompts_file
+    prompt_config = load_yaml(
+        prompts_file
     )
 
-    conversation_starters = load_sample_prompts(
-        sample_prompt_config
+    sample_prompts = load_sample_prompts(
+        prompt_config
+    )
+
+    target_agent_file = (
+        target_dir
+        / "agent.mcs.yml"
+    )
+
+    if not target_agent_file.exists():
+        raise FileNotFoundError(
+            f"Fresh Standard agent.mcs.yml not found: "
+            f"{target_agent_file}"
+        )
+
+    # ------------------------------------------------------------------
+    # Update the fresh Standard shell
+    # ------------------------------------------------------------------
+
+    update_standard_agent(
+        target_agent_file,
+        company_config,
+        sample_prompts,
     )
 
     # ------------------------------------------------------------------
-    # Locate settings file
+    # Copy only proven Evention Standard components
     # ------------------------------------------------------------------
 
-    settings_path = find_single_file(
-        agent_dir,
-        [
-            "settings.mcs.yml",
-            "settings.mcs.yaml",
-        ],
-    )
-
-    # ------------------------------------------------------------------
-    # Apply template
-    # ------------------------------------------------------------------
-
-    update_settings_file(
-        settings_path,
-        conversation_starters,
-    )
-
-    remove_legacy_knowledge_file(
-        agent_dir,
-    )
-
-    create_sharepoint_knowledge(
-        agent_dir,
+    build_standard_components(
+        evention_dir,
+        target_dir,
         company_config,
     )
 
@@ -452,47 +522,48 @@ def main() -> None:
 
     print()
     print("=" * 60)
-    print("BUILD COMPLETE")
+    print("STANDARD PORTFOLIO ANALYST BUILD COMPLETE")
     print("=" * 60)
 
     print(
-        f"Company:      "
+        f"Company:     "
         f"{company_config['companyName']}"
     )
 
     print(
-        f"Agent:        "
+        f"Agent:       "
         f"{company_config['agentDisplayName']}"
     )
 
     print(
-        f"Prompts:      "
-        f"{len(conversation_starters)}"
+        f"Prompts:     "
+        f"{len(sample_prompts)}"
     )
 
     print(
-        f"SharePoint:   "
+        f"SharePoint:  "
         f"{company_config['sharePointUrl']}"
     )
 
+    print(
+        f"Website:     "
+        f"{company_config['companyUrl']}"
+    )
+
     print()
-    print("agent.sync.yaml was not modified.")
-    print("Root-level model.instructions was removed.")
-    print("Knowledge written under capabilities/knowledge/.")
+    print("Standard system topics were left untouched.")
+    print("Miva schema/identity in agent.mcs.yml was preserved.")
+    print("Evention Standard components were used as templates.")
     print()
     print("Next:")
     print("  git status")
     print("  git diff")
     print()
     print(
-        "Review the diff before committing or "
-        "pushing to Copilot Studio."
+        "Review the generated files before applying "
+        "changes to Copilot Studio."
     )
 
-
-# ----------------------------------------------------------------------
-# Entry point
-# ----------------------------------------------------------------------
 
 if __name__ == "__main__":
 
