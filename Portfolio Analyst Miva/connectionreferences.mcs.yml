@@ -1,0 +1,3 @@
+﻿connectionReferences:
+  - connectionReferenceLogicalName: crcc1_portfolioAnalystMiva.shared_workiqsharepoint.d5adb0b214c2415fafdb2996beaf5e03
+    connectorId: /providers/Microsoft.PowerApps/apis/shared_workiqsharepoint

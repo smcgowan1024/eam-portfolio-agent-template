@@ -1,11 +1,11 @@
-displayName: Portfolio Analyst Evention
-schemaName: crcc1_portfolioAnalystEvention
+displayName: Portfolio Analyst Miva
+schemaName: crcc1_portfolioAnalystMiva
 accessControlPolicy: Any
 authenticationMode: Integrated
 authenticationTrigger: Always
 configuration:
   gPTSettings:
-    defaultSchemaName: crcc1_portfolioAnalystEvention.gpt.default
+    defaultSchemaName: crcc1_portfolioAnalystMiva.gpt.default
 
   aISettings:
     useModelKnowledge: true

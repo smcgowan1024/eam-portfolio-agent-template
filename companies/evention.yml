@@ -1,5 +1,8 @@
 companyName: Evention
 agentDisplayName: Portfolio Analyst Evention
+agentComponentName: Portfolio Analyst Evention
 companySharePointName: Evention NEW
 companyUrl: https://www.eventionllc.com/
 sharePointUrl: https://equalityam.sharepoint.com/sites/equalityfilestore/cf_portfolio/Evention%20NEW
+schemaName: crcc1_portfolioAnalystEvention
+dynamicsAgentDescription: Dyanmics Agent for Evention

@@ -1,0 +1,14 @@
+mcs.metadata:
+  componentName: SharePoint MCP - Work IQ SharePoint (Preview)
+kind: TaskDialog
+modelDisplayName: Work IQ SharePoint (Preview)
+modelDescription: "Work IQ MCP server for Microsoft SharePoint operations. This feature is in preview and is part of the Work IQ tools, providing shared work intelligence and actions for agents. Availability and capabilities are subject to change. Learn more: https://aka.ms/AboutWorkIQ"
+action:
+  kind: InvokeExternalAgentTaskAction
+  connectionReference: crcc1_portfolioAnalystMiva.shared_workiqsharepoint.d5adb0b214c2415fafdb2996beaf5e03
+  connectionProperties:
+    mode: Invoker
+
+  operationDetails:
+    kind: ModelContextProtocolMetadata
+    operationId: mcp_SharePointRemoteServer
