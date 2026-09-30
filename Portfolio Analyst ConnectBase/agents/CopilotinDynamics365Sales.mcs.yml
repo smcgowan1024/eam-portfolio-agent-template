@@ -1,0 +1,11 @@
+mcs.metadata:
+  componentName: Copilot in Dynamics 365 Sales
+  description: Dyanmics Agent for ConnectBase
+kind: TaskDialog
+modelDisplayName: Copilot in Dynamics 365 Sales
+modelDescription: Dyanmics Agent for ConnectBase
+action:
+  kind: InvokeConnectedAgentTaskAction
+  botSchemaName: msdyn_salesCopilot
+  historyType:
+    kind: ConversationHistory

@@ -1,0 +1,7 @@
+mcs.metadata:
+  componentName: ConnectBase Website
+  description: Public website knowledge source for ConnectBase.
+kind: KnowledgeSourceConfiguration
+source:
+  kind: PublicSiteSearchSource
+  site: https://www.connectbase.com/

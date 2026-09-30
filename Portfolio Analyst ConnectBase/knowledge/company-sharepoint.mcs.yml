@@ -1,0 +1,7 @@
+mcs.metadata:
+  componentName: ConnectBase NEW
+  description: This knowledge source provides information found in ConnectBase SharePoint.
+kind: KnowledgeSourceConfiguration
+source:
+  kind: SharePointSearchSource
+  site: https://equalityam.sharepoint.com/sites/equalityfilestore/cf_portfolio/ConnectBase%20NEW

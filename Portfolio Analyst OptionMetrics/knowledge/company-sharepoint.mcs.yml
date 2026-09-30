@@ -1,0 +1,7 @@
+mcs.metadata:
+  componentName: OptionMetrics NEW
+  description: This knowledge source provides information found in OptionMetrics SharePoint.
+kind: KnowledgeSourceConfiguration
+source:
+  kind: SharePointSearchSource
+  site: https://equalityam.sharepoint.com/sites/equalityfilestore/cf_portfolio/OptionMetrics%20NEW

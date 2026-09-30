@@ -1,0 +1,7 @@
+mcs.metadata:
+  componentName: OptionMetrics Website
+  description: Public website knowledge source for OptionMetrics.
+kind: KnowledgeSourceConfiguration
+source:
+  kind: PublicSiteSearchSource
+  site: https://optionmetrics.com/
