@@ -1,0 +1,7 @@
+mcs.metadata:
+  componentName: Auctivo Website
+  description: Public website knowledge source for Auctivo.
+kind: KnowledgeSourceConfiguration
+source:
+  kind: PublicSiteSearchSource
+  site: https://www.auctivo.com/
